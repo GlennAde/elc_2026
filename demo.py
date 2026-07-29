@@ -12,7 +12,7 @@ PIXEL_CENTER = (PIXEL_LEFT + PIXEL_RIGHT) / 2.0
 SCALE_K = 25.0 / (PIXEL_RIGHT - PIXEL_LEFT)  # cm / pixel
 
 # ==================== 2. 初始化摄像头 ====================
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(2)
 # 固定曝光，防止环境光线跳变
 cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
 

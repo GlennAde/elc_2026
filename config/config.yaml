@@ -1,0 +1,21 @@
+camera:
+  device_id: 2
+  width: 640
+  height: 480
+  fps: 120
+  # 相机内参占位 (暂时不用则设为 null)
+  camera_matrix: null
+  dist_coeff: null
+
+system:
+  bar_length_cm: 25.0
+
+# Trackbar 默认初始值
+tuner_defaults:
+  roi_y_min: 180
+  roi_y_max: 300
+  pixel_left: 70
+  pixel_right: 570
+  diff_threshold: 30
+  morph_kernel_size: 7
+  projection_min_val: 500
