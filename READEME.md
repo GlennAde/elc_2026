@@ -6,10 +6,12 @@ src/processor.py detect() 签名 (pixel_center, scale_k) → (calib)
 src/main.py 加载标定 + tickCount 实测帧间隔 + 传 calib 和 dt
 config/config.yaml 新增 calibration.file: "config/px2cm.npz"
 scripts/calibrate.py 新建 — 交互式标定，按 r 逐点录，w 保存
+
 数据流变化
 改前:  ball_x_pixel → (px - pixel_center) × 25/500 → cm  (线性，透视误差)
 改后:  ball_x_pixel → np.interp(px, 标定表) → cm          (多点，消除透视)
        Kalman dt: 固定 1/120 → tickCount 实测
+
 参数调整表
 检测参数（Tuner trackbar / config）
 参数 范围 当前值 效果 调法
@@ -18,10 +20,12 @@ pixel_left/right 0~640 70/570 横杆两端 X 像素（线性降级用） 对准�
 diff_threshold 0~255 106 背景差分灵敏度 太高→球碎片化；太低→噪点；调到球完整且背景干净
 morph_kernel_size 3~17 16 形态学闭运算核大小 调大→填补反光空洞；太大→两球粘连误判
 projection_snr 3.0~10.0 5.1 峰噪比阈值(高=严格) 有球时 SNr 几十，调到 > 峰值 SNR 的 1/3 即可
+
 检测参数（config only，无 trackbar）
 参数 位置 当前值 效果 调法
 clahe_clip detector 2.0 局部直方图均衡强度 0 关闭；2~4 适应阴影；太高会增强噪点
 adaptive_bg_alpha detector 0.98 背景更新速率 接近 1=保守(慢适应)；0.9=激进(快适应）
+
 卡尔曼参数（config only）
 参数 当前值 效果 症状 → 调法
 q_pos 0.01 位置过程噪声 位置滞后 → 调大；位置抖 → 调小
