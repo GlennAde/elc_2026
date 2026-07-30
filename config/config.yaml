@@ -3,19 +3,43 @@ camera:
   width: 640
   height: 480
   fps: 120
-  # 相机内参占位 (暂时不用则设为 null)
-  camera_matrix: null
-  dist_coeff: null
 
 system:
   bar_length_cm: 25.0
 
-# Trackbar 默认初始值
+calibration:
+  file: "config/px2cm.npz"   # 多点标定文件，不存在则用线性降级
+
+kalman:
+  dt: 0.00833          # 1 / 120fps
+  q_pos: 0.01          # 位置过程噪声
+  q_vel: 0.5           # 速度过程噪声（较大=允许速度快速变化）
+  r_meas: 0.1          # 测量噪声（较小=更信任观测）
+
+serial:
+  enabled: false
+  port: "/dev/ttyUSB0"
+  baudrate: 115200
+
+detector:
+  clahe_clip: 2.0           # CLAHE 限制阈值，0 表示关闭
+  adaptive_bg_alpha: 0.98   # 自适应背景更新率，越大越保守
+  hough:
+    enabled: false           # 光照不对称时开启
+    param1: 80               # Canny 高阈值
+    param2: 12               # 圆心累加器阈值(越小越灵敏)
+    min_radius: 12
+    max_radius: 32
+    max_deviation: 25        # 霍夫圆与投影质心最大偏差(px)
+
 tuner_defaults:
   roi_y_min: 180
   roi_y_max: 300
   pixel_left: 70
   pixel_right: 570
-  diff_threshold: 30
-  morph_kernel_size: 7
-  projection_min_val: 500
+  diff_threshold: 106
+  morph_kernel_size: 16
+  projection_snr: 51
+
+gui:
+  debug_windows: true

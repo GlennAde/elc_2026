@@ -9,9 +9,9 @@ class Tuner:
         ("ROI_Y_MAX", 300, 480),
         ("PIXEL_LEFT", 70, 640),
         ("PIXEL_RIGHT", 570, 640),
-        ("DIFF_THRESH", 30, 255),
-        ("MORPH_KERNEL", 7, 31),
-        ("PROJ_MIN_VAL", 500, 5000),
+        ("DIFF_THRESHOLD", 30, 255),
+        ("MORPH_KERNEL_SIZE", 7, 17),
+        ("PROJECTION_SNR", 35, 100),
     ]
 
     @staticmethod
@@ -32,7 +32,7 @@ class Tuner:
             "roi_y_max": cv2.getTrackbarPos("ROI_Y_MAX", cls.WINDOW_NAME),
             "pixel_left": cv2.getTrackbarPos("PIXEL_LEFT", cls.WINDOW_NAME),
             "pixel_right": cv2.getTrackbarPos("PIXEL_RIGHT", cls.WINDOW_NAME),
-            "diff_threshold": cv2.getTrackbarPos("DIFF_THRESH", cls.WINDOW_NAME),
-            "morph_kernel_size": cv2.getTrackbarPos("MORPH_KERNEL", cls.WINDOW_NAME),
-            "projection_min_val": cv2.getTrackbarPos("PROJ_MIN_VAL", cls.WINDOW_NAME),
+            "diff_threshold": cv2.getTrackbarPos("DIFF_THRESHOLD", cls.WINDOW_NAME),
+            "morph_kernel_size": cv2.getTrackbarPos("MORPH_KERNEL_SIZE", cls.WINDOW_NAME),
+            "projection_snr": cv2.getTrackbarPos("PROJECTION_SNR", cls.WINDOW_NAME) / 10.0,
         }
