@@ -1,14 +1,16 @@
 import struct
+
 import serial
 
 
 class SerialSender:
     """串口发送器，将位姿数据发送给下位机 MCU
 
-    数据包格式（小端序，共 9 字节）:
+    数据包格式（小端序，共 10 字节）:
         uint8   header         1B  帧头 0xA5
-        float   position_cm    4B  小球位置(cm)，-12.5 ~ 12.5
-        float   velocity_cm_s  4B  小球速度(cm/s)，带正负方向
+        float   position_cm    4B  小球位置(cm),-12.5 ~ 12.5
+        float   velocity_cm_s  4B  小球速度(cm/s),带正负方向
+        uint8   footer         1B  帧尾 0x5A
     """
 
     def __init__(self, port="/dev/ttyUSB0", baudrate=115200):
@@ -33,10 +35,11 @@ class SerialSender:
             return
 
         packet = struct.pack(
-            "<Bff",
+            "<BffB",
             0xA5,
             float(position_cm),
             float(velocity_cm_s),
+            0x5A,
         )
 
         try:

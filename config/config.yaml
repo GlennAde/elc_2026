@@ -17,8 +17,8 @@ kalman:
   r_meas: 0.1          # 测量噪声（较小=更信任观测）
 
 serial:
-  enabled: false
-  port: "/dev/ttyUSB0"
+  enabled: true
+  port: "/dev/ttyS0"
   baudrate: 115200
 
 detector:
