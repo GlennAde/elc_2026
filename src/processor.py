@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 
@@ -8,63 +9,78 @@ class ROIManager:
     """ROI 区域提取与绘制工具类"""
 
     @staticmethod
-    def extract_roi(frame, roi_y_min, roi_y_max):
-        h, _ = frame.shape[:2]
-        y1 = max(0, roi_y_min)
-        y2 = min(h, max(y1 + 1, roi_y_max))
-        roi = frame[y1:y2, :]
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (5, 5), 0)
-        return gray
-
-    @staticmethod
-    def draw_roi_overlay(frame, roi_y_min, roi_y_max):
+    def extract_roi(frame, roi_y_min, roi_y_max, roi_x_min=None, roi_x_max=None):
         h, w = frame.shape[:2]
         y1 = max(0, roi_y_min)
         y2 = min(h, max(y1 + 1, roi_y_max))
-        cv2.rectangle(frame, (0, y1), (w, y2), (0, 255, 255), 2)
+        if roi_x_min is None:
+            x1 = 0
+        else:
+            x1 = max(0, min(w - 1, roi_x_min))
+        if roi_x_max is None:
+            x2 = w
+        else:
+            x2 = max(x1 + 1, min(w, roi_x_max))
+        if y1 >= y2 or x1 >= x2:
+            return None, x1
+        roi = frame[y1:y2, x1:x2]
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        return gray, x1
+
+    @staticmethod
+    def draw_roi_overlay(frame, roi_y_min, roi_y_max, center_pixel=None,
+                         roi_x_min=None, roi_x_max=None):
+        h, w = frame.shape[:2]
+        y1 = max(0, roi_y_min)
+        y2 = min(h, max(y1 + 1, roi_y_max))
+
+        def _dash(x, color):
+            for step in range(y1, y2, 8):
+                cv2.line(frame, (x, step), (x, min(step + 4, y2)), color, 1)
+
+        x1_vis = roi_x_min if roi_x_min is not None else 0
+        x2_vis = roi_x_max if roi_x_max is not None else w
+        cv2.rectangle(frame, (x1_vis, y1), (x2_vis, y2), (0, 255, 255), 2)
         cv2.putText(
-            frame, "ROI Area", (10, max(15, y1 - 5)),
+            frame, "ROI Area", (x1_vis + 5, max(15, y1 - 5)),
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1,
         )
+        if roi_x_min is not None:
+            _dash(roi_x_min, (0, 220, 0))
+        if roi_x_max is not None:
+            _dash(roi_x_max, (0, 220, 0))
+        if center_pixel is not None:
+            cx = max(0, min(w, int(center_pixel)))
+            _dash(cx, (255, 0, 0))
 
 
 class Visualizer:
     """视觉绘制与调试窗口工具类"""
 
     @staticmethod
-    def draw_ball_overlay(frame, ball_pos_cm, ball_x_pixel, roi_y_min, roi_y_max,
-                          velocity_cm_s=None):
+    def draw_ball_overlay(frame, ball_x_pixel, roi_y_min, roi_y_max):
         roi_center_y = int((roi_y_min + roi_y_max) / 2)
         cv2.circle(frame, (int(ball_x_pixel), roi_center_y), 12, (0, 255, 0), -1)
-        cv2.putText(
-            frame,
-            f"Raw Pos: {ball_pos_cm:.2f} cm",
-            (20, 50),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.9,
-            (0, 255, 0),
-            2,
-        )
 
     @staticmethod
     def draw_pose_overlay(frame, position_cm, velocity_cm_s):
         cv2.putText(
             frame,
-            f"Filtered Pos: {position_cm:.2f} cm",
-            (20, 90),
+            f"Pos: {position_cm:.2f} cm",
+            (20, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
+            0.7,
             (0, 255, 255),
             2,
         )
         direction = "->" if velocity_cm_s > 0 else "<-" if velocity_cm_s < 0 else "--"
         cv2.putText(
             frame,
-            f"Velocity: {velocity_cm_s:.2f} cm/s {direction}",
-            (20, 125),
+            f"Vel: {velocity_cm_s:.2f} cm/s {direction}",
+            (20, 58),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
+            0.7,
             (0, 255, 255),
             2,
         )
@@ -105,7 +121,12 @@ class Visualizer:
 
 
 class BallDetector:
-    """钢球检测核心处理类"""
+    """钢球检测 — 静态背景 + 像素级选择性更新
+
+    背景更新策略：仅更新 diff < bg_adapt_threshold 的像素，
+    钢珠/异物位置 diff 大 → 不更新 → 不会被吸收。
+    光照缓变：背景像素 diff 小 → 缓慢适应。
+    """
 
     AREA_MIN = 500
     AREA_MAX = 15000
@@ -114,10 +135,17 @@ class BallDetector:
     POS_JUMP_MAX_CM = 2.0
     CONFIRM_FRAMES = 2
 
-    def __init__(self, clahe_clip=2.0, adaptive_bg_alpha=0.98, hough_cfg=None):
+    def __init__(self, clahe_clip=2.0, hough_cfg=None,
+                 bg_file=None, bg_adapt_rate=0.005, bg_adapt_threshold=30):
+        self.bg_file = bg_file
+        self.bg_adapt_rate = bg_adapt_rate
+        self.bg_adapt_threshold = bg_adapt_threshold
         self.bg_gray = None
-        self.bg_initialized = False
-        self.adaptive_bg_alpha = adaptive_bg_alpha
+        self._bg_accum = None
+        self._bg_count = 0
+        self._bg_frames = 30
+        self._bg_last_shape = None
+
         if clahe_clip > 0:
             self.clahe = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=(8, 8))
         else:
@@ -137,12 +165,8 @@ class BallDetector:
 
         self._last_raw_pos = None
         self._confirm_count = 0
-        self._no_raw_detect_count = 0
         self._is_tracking = False
-
-    @property
-    def should_update_background(self):
-        return self._no_raw_detect_count >= 5 and self.bg_initialized
+        self._bg_status = "acquiring"
 
     def _preprocess(self, roi_gray):
         if self.clahe is not None:
@@ -150,32 +174,75 @@ class BallDetector:
         return roi_gray
 
     def capture_background(self, roi_gray):
-        processed = self._preprocess(roi_gray)
-        self.bg_gray = processed.copy()
-        self.bg_initialized = True
-        self._last_raw_pos = None
-        self._confirm_count = 0
-        self._no_raw_detect_count = 0
-        self._is_tracking = False
+        self.bg_gray = self._preprocess(roi_gray)
+        self._bg_accum = None
+        self._bg_count = 0
+        self._bg_last_shape = self.bg_gray.shape
+        self._bg_status = "ready"
 
     def has_background(self):
-        return self.bg_initialized
+        return self.bg_gray is not None
 
-    def update_background(self, roi_gray):
-        if not self.bg_initialized:
+    def _init_bg(self, roi_gray):
+        """尝试加载背景文件，否则自动累积截取"""
+        if self.bg_file:
+            path = self.bg_file
+            if not os.path.isabs(path):
+                path = os.path.join(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__))), path)
+            if os.path.exists(path):
+                file_bg = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+                if file_bg is not None and file_bg.shape == roi_gray.shape:
+                    self.bg_gray = self._preprocess(file_bg)
+                    self._bg_status = "loaded"
+                    return True
+
+        if self._bg_accum is None or self._bg_accum.shape != roi_gray.shape:
+            self._bg_accum = np.zeros_like(roi_gray, dtype=np.float64)
+            self._bg_count = 0
+
+        self._bg_count += 1
+        np.add(self._bg_accum, roi_gray.astype(np.float64), out=self._bg_accum)
+
+        if self._bg_count >= self._bg_frames:
+            self.bg_gray = (
+                self._bg_accum / self._bg_count).clip(0, 255).astype(np.uint8)
+            self._bg_accum = None
+            self._bg_last_shape = roi_gray.shape
+            self._bg_status = "ready"
+            return True
+
+        self._bg_status = f"acquiring {self._bg_count}/{self._bg_frames}"
+        return False
+
+    def _adapt_bg(self, roi_gray, diff):
+        if self.bg_gray is None:
             return
-        processed = self._preprocess(roi_gray)
-        alpha = self.adaptive_bg_alpha
-        self.bg_gray = cv2.addWeighted(processed, 1.0 - alpha,
-                                       self.bg_gray, alpha, 0)
-        self._no_raw_detect_count = 0
+        mask = diff < self.bg_adapt_threshold
+        if not np.any(mask):
+            return
+        alpha = self.bg_adapt_rate
+        bg_f = self.bg_gray.astype(np.float32)
+        roi_f = roi_gray.astype(np.float32)
+        bg_f[mask] = (1.0 - alpha) * bg_f[mask] + alpha * roi_f[mask]
+        np.clip(bg_f, 0, 255, out=bg_f)
+        self.bg_gray = bg_f.astype(np.uint8)
 
     def detect(self, roi_gray, diff_threshold, morph_kernel_size,
-               projection_snr, calib):
-        if self.bg_gray is None:
-            return None, {}
-
+               projection_snr, center_pixel, scale_k, half_bar,
+               area_min=None, area_max=None, roi_x_min=0):
         roi_gray = self._preprocess(roi_gray)
+
+        if self._bg_last_shape is not None and roi_gray.shape != self._bg_last_shape:
+            self.bg_gray = None
+            self._bg_accum = None
+            self._bg_count = 0
+            self._bg_last_shape = None
+            self._bg_status = "acquiring"
+
+        if self.bg_gray is None:
+            self._init_bg(roi_gray)
+            return None, {}
 
         diff = cv2.absdiff(roi_gray, self.bg_gray)
         _, thresh = cv2.threshold(diff, diff_threshold, 255, cv2.THRESH_BINARY)
@@ -194,12 +261,12 @@ class BallDetector:
             "thresh": thresh_clean,
             "projection": y_projection,
             "max_val": max_val,
+            "bg_status": self._bg_status,
         }
 
         ball_pos_cm = None
         raw_detected = False
 
-        # A. 峰噪比 (SNR)：max / mean(全列投影)，与 DIFF_THRESH 和光照解耦
         mean_proj = float(np.mean(y_projection))
         baseline = max(mean_proj, 1.0)
         snr = max_val / baseline
@@ -215,33 +282,34 @@ class BallDetector:
                 ball_x_pixel = np.average(indices, weights=y_projection)
             else:
                 ball_x_pixel = float(np.argmax(y_projection))
-            debug["ball_x_pixel"] = int(ball_x_pixel)
-            ball_pos_cm = calib.px_to_cm_clamped(ball_x_pixel)
+            ball_x_global = ball_x_pixel + roi_x_min
+            debug["ball_x_pixel"] = int(ball_x_global)
+            ball_pos_cm = (ball_x_global - center_pixel) * scale_k
+            ball_pos_cm = max(-half_bar, min(half_bar, ball_pos_cm))
 
-            # B. 波峰半高宽校验：小球 ~25-55px / 噪声尖刺 <5px / 阴影 >120px
             half_max = max_val / 2.0
             peak_width = int(np.sum(y_projection > half_max))
             if self.PEAK_WIDTH_MIN <= peak_width <= self.PEAK_WIDTH_MAX:
                 raw_detected = True
 
-        # B2. 霍夫圆精修：修正因光照不对称造成的投影质心偏位
         if raw_detected and self.hough is not None:
             hough_x, hough_r = self.hough.refine(roi_gray, ball_x_pixel)
             if hough_x is not None:
-                ball_x_pixel = hough_x
-                debug["ball_x_pixel"] = int(ball_x_pixel)
+                ball_x_global = hough_x + roi_x_min
+                debug["ball_x_pixel"] = int(ball_x_global)
                 debug["hough_r"] = int(hough_r)
-                ball_pos_cm = calib.px_to_cm_clamped(ball_x_pixel)
+                ball_pos_cm = (ball_x_global - center_pixel) * scale_k
+                ball_pos_cm = max(-half_bar, min(half_bar, ball_pos_cm))
 
-        # C. 面积校验：排除噪点团块和大面积光照伪影
         if raw_detected:
             area = cv2.countNonZero(thresh_clean)
-            if area < self.AREA_MIN or area > self.AREA_MAX:
+            _min = area_min if area_min is not None else self.AREA_MIN
+            _max = area_max if area_max is not None else self.AREA_MAX
+            if area < _min or area > _max:
                 raw_detected = False
                 ball_pos_cm = None
                 debug.pop("ball_x_pixel", None)
 
-        # D. 位置连续性：物理上 8ms 内不可能跳变 >2cm
         if raw_detected:
             if self._last_raw_pos is not None and \
                abs(ball_pos_cm - self._last_raw_pos) > self.POS_JUMP_MAX_CM:
@@ -249,19 +317,20 @@ class BallDetector:
                 ball_pos_cm = None
                 debug.pop("ball_x_pixel", None)
 
-        # E. 多帧确认 + 安全背景更新计数
         if raw_detected:
             self._last_raw_pos = ball_pos_cm
             self._confirm_count += 1
-            self._no_raw_detect_count = 0
             if self._confirm_count < self.CONFIRM_FRAMES:
                 ball_pos_cm = None
         else:
             self._confirm_count = 0
             self._last_raw_pos = None
-            self._no_raw_detect_count += 1
             ball_pos_cm = None
 
         self._is_tracking = (self._confirm_count >= self.CONFIRM_FRAMES)
+
+        # 背景自适应更新：仅在无检测时更新（防止吸收钢珠边缘）
+        if not raw_detected:
+            self._adapt_bg(roi_gray, diff)
 
         return ball_pos_cm, debug

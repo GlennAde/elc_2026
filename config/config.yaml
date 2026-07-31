@@ -1,14 +1,11 @@
 camera:
-  device_id: 2
+  device_id: 0
   width: 640
   height: 480
   fps: 120
 
 system:
   bar_length_cm: 25.0
-
-calibration:
-  file: "config/px2cm.npz"   # 多点标定文件，不存在则用线性降级
 
 kalman:
   dt: 0.00833          # 1 / 120fps
@@ -18,7 +15,7 @@ kalman:
 
 serial:
   enabled: true
-  port: "/dev/ttyS0"
+  port: "/dev/ttyCP210x"
   baudrate: 115200
 
 detector:
@@ -33,13 +30,17 @@ detector:
     max_deviation: 25        # 霍夫圆与投影质心最大偏差(px)
 
 tuner_defaults:
-  roi_y_min: 180
-  roi_y_max: 300
-  pixel_left: 70
-  pixel_right: 570
-  diff_threshold: 106
-  morph_kernel_size: 16
-  projection_snr: 51
+  roi_y_min: 156
+  roi_y_max: 186
+  pixel_left: 110
+  pixel_right: 526
+  center_pixel: 319
+  diff_threshold: 26
+  morph_kernel_size: 13
+  projection_snr: 37
+  bar_length_cm: 25
+  area_min: 225
+  area_max: 15000
 
 gui:
   debug_windows: true

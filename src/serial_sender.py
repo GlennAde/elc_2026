@@ -13,7 +13,7 @@ class SerialSender:
         uint8   footer         1B  帧尾 0x5A
     """
 
-    def __init__(self, port="/dev/ttyUSB0", baudrate=115200):
+    def __init__(self, port="/dev/ttyCP210x", baudrate=115200):
         self.port = port
         self.baudrate = baudrate
         self.ser = None

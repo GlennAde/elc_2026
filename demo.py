@@ -1,20 +1,48 @@
+import os
+import sys
+
 import cv2
 import numpy as np
+import yaml
 
-ROI_Y_MIN, ROI_Y_MAX = 180, 300
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
-PIXEL_LEFT = 70
-PIXEL_RIGHT = 570
-PIXEL_CENTER = (PIXEL_LEFT + PIXEL_RIGHT) / 2.0
-SCALE_K = 25.0 / (PIXEL_RIGHT - PIXEL_LEFT)
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(PROJECT_ROOT, "config", "config.yaml")
 
-CAPTURE_FPS = 120
-DT = 1.0 / CAPTURE_FPS
+with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f)
 
-cap = cv2.VideoCapture(2)
+camera_cfg = cfg.get("camera", {})
+tuner_cfg = cfg.get("tuner_defaults", {})
+detector_cfg = cfg.get("detector", {})
+system_cfg = cfg.get("system", {})
+
+ROI_Y_MIN = tuner_cfg.get("roi_y_min", 180)
+ROI_Y_MAX = tuner_cfg.get("roi_y_max", 300)
+
+PIXEL_LEFT = tuner_cfg.get("pixel_left", 70)
+PIXEL_RIGHT = tuner_cfg.get("pixel_right", 570)
+PIXEL_CENTER = tuner_cfg.get("center_pixel", (PIXEL_LEFT + PIXEL_RIGHT) / 2.0)
+BAR_LENGTH_CM = system_cfg.get("bar_length_cm", 25.0)
+SCALE_K = BAR_LENGTH_CM / (PIXEL_RIGHT - PIXEL_LEFT)
+
+DIFF_THRESHOLD = tuner_cfg.get("diff_threshold", 30)
+MORPH_KERNEL_SIZE = tuner_cfg.get("morph_kernel_size", 7)
+PROJECTION_SNR = tuner_cfg.get("projection_snr", 5.0)
+
+CAPTURE_FPS = camera_cfg.get("fps", 120)
+DT = cfg.get("kalman", {}).get("dt", 1.0 / 120.0)
+
+CLAHE_CLIP = detector_cfg.get("clahe_clip", 2.0)
+
+cap = cv2.VideoCapture(camera_cfg.get("device_id", 0))
 cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
 
-clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+if CLAHE_CLIP > 0:
+    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP, tileGridSize=(8, 8))
+else:
+    clahe = None
 
 bg_gray = None
 
@@ -44,7 +72,8 @@ while cap.isOpened():
     roi = frame[ROI_Y_MIN:ROI_Y_MAX, :]
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    gray = clahe.apply(gray)
+    if clahe is not None:
+        gray = clahe.apply(gray)
 
     key = cv2.waitKey(1) & 0xFF
     if key == ord("s"):

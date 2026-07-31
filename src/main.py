@@ -6,8 +6,7 @@ from camera import Camera
 from processor import BallDetector, ROIManager, Visualizer
 from tuner import Tuner
 from kalman import BallKalmanFilter
-from serial import SerialSender
-from calib import Calibration
+from serial_sender import SerialSender
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -32,10 +31,15 @@ class Application:
         )
 
         det_cfg = self.cfg.get("detector", {})
+        bg_file = det_cfg.get("background_file")
+        if bg_file:
+            bg_file = os.path.join(PROJECT_ROOT, bg_file) if not os.path.isabs(bg_file) else bg_file
         self.detector = BallDetector(
             clahe_clip=det_cfg.get("clahe_clip", 2.0),
-            adaptive_bg_alpha=det_cfg.get("adaptive_bg_alpha", 0.98),
             hough_cfg=det_cfg.get("hough"),
+            bg_file=bg_file,
+            bg_adapt_rate=det_cfg.get("bg_adapt_rate", 0.005),
+            bg_adapt_threshold=det_cfg.get("bg_adapt_threshold", 30),
         )
 
         kf_cfg = self.cfg.get("kalman", {})
@@ -48,47 +52,34 @@ class Application:
 
         self.bar_length_cm = self.cfg["system"]["bar_length_cm"]
 
-        calib_cfg = self.cfg.get("calibration", {})
-        self.calib = self._load_calibration(calib_cfg)
-
         self.show_debug = self.cfg.get("gui", {}).get("debug_windows", True)
         self._static_params = self._build_static_params()
-        self._auto_bg_frames = 0
         self._last_frame_ts = None
 
         self.serial = None
         ser_cfg = self.cfg.get("serial", {})
         if ser_cfg:
             self.serial = SerialSender(
-                port=ser_cfg.get("port", "/dev/ttyUSB0"),
+                port=ser_cfg.get("port", "/dev/ttyCP210x"),
                 baudrate=ser_cfg.get("baudrate", 115200),
             )
 
-    def _load_calibration(self, calib_cfg):
-        filepath = calib_cfg.get("file")
-        if filepath:
-            abs_path = os.path.join(PROJECT_ROOT, filepath) if not os.path.isabs(filepath) else filepath
-            if os.path.exists(abs_path):
-                print(f"[Calib Info] 加载标定文件 '{abs_path}'")
-                return Calibration.from_file(abs_path)
-
+    def _build_static_params(self):
         d = self.cfg.get("tuner_defaults", {})
         pl = d.get("pixel_left", 70)
         pr = d.get("pixel_right", 570)
-        bar = self.cfg["system"]["bar_length_cm"]
-        print(f"[Calib Info] 标定文件不存在，使用线性模式 ({pl}→{-bar/2}cm, {pr}→{bar/2}cm)")
-        return Calibration.from_linear(pl, pr, bar)
-
-    def _build_static_params(self):
-        d = self.cfg.get("tuner_defaults", {})
         return {
             "roi_y_min": d.get("roi_y_min", 180),
             "roi_y_max": d.get("roi_y_max", 300),
-            "pixel_left": d.get("pixel_left", 70),
-            "pixel_right": d.get("pixel_right", 570),
+            "pixel_left": pl,
+            "pixel_right": pr,
+            "center_pixel": d.get("center_pixel", (pl + pr) // 2),
             "diff_threshold": d.get("diff_threshold", 30),
             "morph_kernel_size": d.get("morph_kernel_size", 7),
             "projection_snr": d.get("projection_snr", 35) / 10.0,
+            "bar_length_cm": d.get("bar_length_cm", self.bar_length_cm),
+            "area_min": d.get("area_min", 500),
+            "area_max": d.get("area_max", 15000),
         }
 
     def run(self):
@@ -108,6 +99,7 @@ class Application:
 
             if self.show_debug:
                 p = Tuner.get_params()
+                Tuner.show_info(p)
             else:
                 p = self._static_params
 
@@ -120,22 +112,18 @@ class Application:
             self._last_frame_ts = now
 
             if self.show_debug:
-                ROIManager.draw_roi_overlay(frame, roi_y_min, roi_y_max)
-            roi_gray = ROIManager.extract_roi(frame, roi_y_min, roi_y_max)
+                ROIManager.draw_roi_overlay(frame, roi_y_min, roi_y_max,
+                                            center_pixel=p.get("center_pixel"),
+                                            roi_x_min=p["pixel_left"],
+                                            roi_x_max=p["pixel_right"])
+            roi_gray, roi_x_min = ROIManager.extract_roi(
+                frame, roi_y_min, roi_y_max,
+                roi_x_min=p["pixel_left"], roi_x_max=p["pixel_right"],
+            )
+            if roi_gray is None:
+                continue
 
             key = cv2.waitKey(1) & 0xFF if self.show_debug else -1
-
-            if not self.show_debug and not self.detector.has_background():
-                self._auto_bg_frames += 1
-                if self._auto_bg_frames == 30:
-                    self.detector.capture_background(roi_gray)
-                    self.kf.reset()
-                    print(">> [System] 无头模式：自动截取背景。")
-
-            if key == ord("s"):
-                self.detector.capture_background(roi_gray)
-                self.kf.reset()
-                print(">> [System] 背景截取成功！卡尔曼滤波器已重置。")
 
             if key == ord("o"):
                 if self.serial:
@@ -147,48 +135,44 @@ class Application:
             filtered_pos = None
             filtered_vel = None
 
-            if self.detector.has_background():
-                ball_pos_cm, debug = self.detector.detect(
-                    roi_gray,
-                    p["diff_threshold"], p["morph_kernel_size"],
-                    p["projection_snr"], self.calib,
+            ball_pos_cm, debug = self.detector.detect(
+                roi_gray,
+                p["diff_threshold"], p["morph_kernel_size"],
+                p["projection_snr"],
+                center_pixel=p.get("center_pixel", (p["pixel_left"] + p["pixel_right"]) // 2),
+                scale_k=self.bar_length_cm / (p["pixel_right"] - p["pixel_left"]) if p["pixel_right"] != p["pixel_left"] else 0.0,
+                half_bar=self.bar_length_cm / 2.0,
+                area_min=p.get("area_min"), area_max=p.get("area_max"),
+                roi_x_min=roi_x_min,
+            )
+
+            if ball_pos_cm is not None:
+                filtered_pos, filtered_vel = self.kf.update(ball_pos_cm, dt=dt_real)
+            else:
+                filtered_pos, filtered_vel = self.kf.update(dt=dt_real)
+
+            if self.show_debug and debug:
+                proj_canvas = Visualizer.build_projection_canvas(
+                    debug["projection"], frame.shape[1],
+                    debug.get("ball_x_pixel"),
+                )
+                Visualizer.show_debug_windows(
+                    debug["diff"], debug["thresh"], proj_canvas,
                 )
 
                 if ball_pos_cm is not None:
-                    filtered_pos, filtered_vel = self.kf.update(ball_pos_cm, dt=dt_real)
-                else:
-                    filtered_pos, filtered_vel = self.kf.update(dt=dt_real)
-                    if self.detector.should_update_background:
-                        self.detector.update_background(roi_gray)
-
-                if self.show_debug and debug:
-                    proj_canvas = Visualizer.build_projection_canvas(
-                        debug["projection"], frame.shape[1],
-                        debug.get("ball_x_pixel"),
-                    )
-                    Visualizer.show_debug_windows(
-                        debug["diff"], debug["thresh"], proj_canvas,
+                    Visualizer.draw_ball_overlay(
+                        frame, debug["ball_x_pixel"],
+                        roi_y_min, roi_y_max,
                     )
 
-                    if ball_pos_cm is not None:
-                        Visualizer.draw_ball_overlay(
-                            frame, ball_pos_cm, debug["ball_x_pixel"],
-                            roi_y_min, roi_y_max,
-                        )
-
-                if self.show_debug and filtered_pos is not None:
-                    Visualizer.draw_pose_overlay(frame, filtered_pos,
-                                                 filtered_vel or 0.0)
+            if self.show_debug and filtered_pos is not None:
+                Visualizer.draw_pose_overlay(frame, filtered_pos,
+                                             filtered_vel or 0.0)
 
             if self.serial and self.serial.enabled:
-                if self.show_debug:
-                    Visualizer.draw_serial_status(frame, True)
                 if filtered_pos is not None:
                     self.serial.send(filtered_pos, filtered_vel or 0.0)
-            else:
-                if self.show_debug:
-                    Visualizer.draw_serial_status(frame, False)
-
             if self.show_debug:
                 cv2.imshow("Main View", frame)
 
