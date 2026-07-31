@@ -1,4 +1,3 @@
-import os
 import cv2
 import numpy as np
 
@@ -121,12 +120,7 @@ class Visualizer:
 
 
 class BallDetector:
-    """钢球检测 — 静态背景 + 像素级选择性更新
-
-    背景更新策略：仅更新 diff < bg_adapt_threshold 的像素，
-    钢珠/异物位置 diff 大 → 不更新 → 不会被吸收。
-    光照缓变：背景像素 diff 小 → 缓慢适应。
-    """
+    """钢球检测 — 反相二值化 + 最高峰连通域加权质心"""
 
     AREA_MIN = 500
     AREA_MAX = 15000
@@ -135,17 +129,7 @@ class BallDetector:
     POS_JUMP_MAX_CM = 2.0
     CONFIRM_FRAMES = 2
 
-    def __init__(self, clahe_clip=2.0, hough_cfg=None,
-                 bg_file=None, bg_adapt_rate=0.005, bg_adapt_threshold=30):
-        self.bg_file = bg_file
-        self.bg_adapt_rate = bg_adapt_rate
-        self.bg_adapt_threshold = bg_adapt_threshold
-        self.bg_gray = None
-        self._bg_accum = None
-        self._bg_count = 0
-        self._bg_frames = 30
-        self._bg_last_shape = None
-
+    def __init__(self, clahe_clip=2.0, hough_cfg=None):
         if clahe_clip > 0:
             self.clahe = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=(8, 8))
         else:
@@ -166,102 +150,34 @@ class BallDetector:
         self._last_raw_pos = None
         self._confirm_count = 0
         self._is_tracking = False
-        self._bg_status = "acquiring"
 
     def _preprocess(self, roi_gray):
         if self.clahe is not None:
             return self.clahe.apply(roi_gray)
         return roi_gray
 
-    def capture_background(self, roi_gray):
-        self.bg_gray = self._preprocess(roi_gray)
-        self._bg_accum = None
-        self._bg_count = 0
-        self._bg_last_shape = self.bg_gray.shape
-        self._bg_status = "ready"
-
-    def has_background(self):
-        return self.bg_gray is not None
-
-    def _init_bg(self, roi_gray):
-        """尝试加载背景文件，否则自动累积截取"""
-        if self.bg_file:
-            path = self.bg_file
-            if not os.path.isabs(path):
-                path = os.path.join(os.path.dirname(os.path.dirname(
-                    os.path.abspath(__file__))), path)
-            if os.path.exists(path):
-                file_bg = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-                if file_bg is not None and file_bg.shape == roi_gray.shape:
-                    self.bg_gray = self._preprocess(file_bg)
-                    self._bg_status = "loaded"
-                    return True
-
-        if self._bg_accum is None or self._bg_accum.shape != roi_gray.shape:
-            self._bg_accum = np.zeros_like(roi_gray, dtype=np.float64)
-            self._bg_count = 0
-
-        self._bg_count += 1
-        np.add(self._bg_accum, roi_gray.astype(np.float64), out=self._bg_accum)
-
-        if self._bg_count >= self._bg_frames:
-            self.bg_gray = (
-                self._bg_accum / self._bg_count).clip(0, 255).astype(np.uint8)
-            self._bg_accum = None
-            self._bg_last_shape = roi_gray.shape
-            self._bg_status = "ready"
-            return True
-
-        self._bg_status = f"acquiring {self._bg_count}/{self._bg_frames}"
-        return False
-
-    def _adapt_bg(self, roi_gray, diff):
-        if self.bg_gray is None:
-            return
-        mask = diff < self.bg_adapt_threshold
-        if not np.any(mask):
-            return
-        alpha = self.bg_adapt_rate
-        bg_f = self.bg_gray.astype(np.float32)
-        roi_f = roi_gray.astype(np.float32)
-        bg_f[mask] = (1.0 - alpha) * bg_f[mask] + alpha * roi_f[mask]
-        np.clip(bg_f, 0, 255, out=bg_f)
-        self.bg_gray = bg_f.astype(np.uint8)
-
-    def detect(self, roi_gray, diff_threshold, morph_kernel_size,
-               projection_snr, center_pixel, scale_k, half_bar,
-               area_min=None, area_max=None, roi_x_min=0):
+    def detect_simple(self, roi_gray, simple_threshold, morph_kernel_size,
+                      projection_snr, center_pixel, scale_k, half_bar,
+                      area_min=None, area_max=None, roi_x_min=0):
         roi_gray = self._preprocess(roi_gray)
 
-        if self._bg_last_shape is not None and roi_gray.shape != self._bg_last_shape:
-            self.bg_gray = None
-            self._bg_accum = None
-            self._bg_count = 0
-            self._bg_last_shape = None
-            self._bg_status = "acquiring"
+        _, thresh = cv2.threshold(roi_gray, simple_threshold, 255, cv2.THRESH_BINARY_INV)
 
-        if self.bg_gray is None:
-            self._init_bg(roi_gray)
-            return None, {}
-
-        diff = cv2.absdiff(roi_gray, self.bg_gray)
-        _, thresh = cv2.threshold(diff, diff_threshold, 255, cv2.THRESH_BINARY)
-
-        ks = max(1, morph_kernel_size)
-        if ks % 2 == 0:
-            ks += 1
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
+        ks_m = max(1, morph_kernel_size)
+        if ks_m % 2 == 0:
+            ks_m += 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks_m, ks_m))
         thresh_clean = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
         y_projection = np.sum(thresh_clean, axis=0, dtype=np.float32)
         max_val = np.max(y_projection)
 
         debug = {
-            "diff": diff,
+            "diff": thresh,
             "thresh": thresh_clean,
             "projection": y_projection,
             "max_val": max_val,
-            "bg_status": self._bg_status,
+            "bg_status": "simple",
         }
 
         ball_pos_cm = None
@@ -276,19 +192,30 @@ class BallDetector:
             eff_snr = projection_snr * 0.7
 
         if max_val > 10 and snr > eff_snr:
-            total_mass = np.sum(y_projection)
+            half_max = max_val / 2.0
+            above = y_projection > half_max
+
+            peak_center = int(np.argmax(y_projection))
+            left = peak_center
+            while left > 0 and above[left - 1]:
+                left -= 1
+            right = peak_center
+            while right < len(above) - 1 and above[right + 1]:
+                right += 1
+
+            peak_region = y_projection[left:right + 1]
+            total_mass = np.sum(peak_region)
             if total_mass > 0:
-                indices = np.arange(len(y_projection), dtype=np.float32)
-                ball_x_pixel = np.average(indices, weights=y_projection)
+                indices = np.arange(left, right + 1, dtype=np.float32)
+                ball_x_pixel = np.average(indices, weights=peak_region)
             else:
-                ball_x_pixel = float(np.argmax(y_projection))
+                ball_x_pixel = float(peak_center)
             ball_x_global = ball_x_pixel + roi_x_min
             debug["ball_x_pixel"] = int(ball_x_global)
             ball_pos_cm = (ball_x_global - center_pixel) * scale_k
             ball_pos_cm = max(-half_bar, min(half_bar, ball_pos_cm))
 
-            half_max = max_val / 2.0
-            peak_width = int(np.sum(y_projection > half_max))
+            peak_width = right - left + 1
             if self.PEAK_WIDTH_MIN <= peak_width <= self.PEAK_WIDTH_MAX:
                 raw_detected = True
 
@@ -329,8 +256,106 @@ class BallDetector:
 
         self._is_tracking = (self._confirm_count >= self.CONFIRM_FRAMES)
 
-        # 背景自适应更新：仅在无检测时更新（防止吸收钢珠边缘）
-        if not raw_detected:
-            self._adapt_bg(roi_gray, diff)
+        return ball_pos_cm, debug
+
+    def detect_simple(self, roi_gray, simple_threshold, morph_kernel_size,
+                      projection_snr, center_pixel, scale_k, half_bar,
+                      area_min=None, area_max=None, roi_x_min=0):
+        roi_gray = self._preprocess(roi_gray)
+
+        _, thresh = cv2.threshold(roi_gray, simple_threshold, 255, cv2.THRESH_BINARY_INV)
+
+        ks_m = max(1, morph_kernel_size)
+        if ks_m % 2 == 0:
+            ks_m += 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks_m, ks_m))
+        thresh_clean = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
+        y_projection = np.sum(thresh_clean, axis=0, dtype=np.float32)
+        max_val = np.max(y_projection)
+
+        debug = {
+            "diff": thresh,
+            "thresh": thresh_clean,
+            "projection": y_projection,
+            "max_val": max_val,
+            "bg_status": "simple",
+        }
+
+        ball_pos_cm = None
+        raw_detected = False
+
+        mean_proj = float(np.mean(y_projection))
+        baseline = max(mean_proj, 1.0)
+        snr = max_val / baseline
+
+        eff_snr = projection_snr
+        if self._is_tracking:
+            eff_snr = projection_snr * 0.7
+
+        if max_val > 10 and snr > eff_snr:
+            half_max = max_val / 2.0
+            above = y_projection > half_max
+
+            peak_center = int(np.argmax(y_projection))
+            left = peak_center
+            while left > 0 and above[left - 1]:
+                left -= 1
+            right = peak_center
+            while right < len(above) - 1 and above[right + 1]:
+                right += 1
+
+            peak_region = y_projection[left:right + 1]
+            total_mass = np.sum(peak_region)
+            if total_mass > 0:
+                indices = np.arange(left, right + 1, dtype=np.float32)
+                ball_x_pixel = np.average(indices, weights=peak_region)
+            else:
+                ball_x_pixel = float(peak_center)
+            ball_x_global = ball_x_pixel + roi_x_min
+            debug["ball_x_pixel"] = int(ball_x_global)
+            ball_pos_cm = (ball_x_global - center_pixel) * scale_k
+            ball_pos_cm = max(-half_bar, min(half_bar, ball_pos_cm))
+
+            peak_width = right - left + 1
+            if self.PEAK_WIDTH_MIN <= peak_width <= self.PEAK_WIDTH_MAX:
+                raw_detected = True
+
+        if raw_detected and self.hough is not None:
+            hough_x, hough_r = self.hough.refine(roi_gray, ball_x_pixel)
+            if hough_x is not None:
+                ball_x_global = hough_x + roi_x_min
+                debug["ball_x_pixel"] = int(ball_x_global)
+                debug["hough_r"] = int(hough_r)
+                ball_pos_cm = (ball_x_global - center_pixel) * scale_k
+                ball_pos_cm = max(-half_bar, min(half_bar, ball_pos_cm))
+
+        if raw_detected:
+            area = cv2.countNonZero(thresh_clean)
+            _min = area_min if area_min is not None else self.AREA_MIN
+            _max = area_max if area_max is not None else self.AREA_MAX
+            if area < _min or area > _max:
+                raw_detected = False
+                ball_pos_cm = None
+                debug.pop("ball_x_pixel", None)
+
+        if raw_detected:
+            if self._last_raw_pos is not None and \
+               abs(ball_pos_cm - self._last_raw_pos) > self.POS_JUMP_MAX_CM:
+                raw_detected = False
+                ball_pos_cm = None
+                debug.pop("ball_x_pixel", None)
+
+        if raw_detected:
+            self._last_raw_pos = ball_pos_cm
+            self._confirm_count += 1
+            if self._confirm_count < self.CONFIRM_FRAMES:
+                ball_pos_cm = None
+        else:
+            self._confirm_count = 0
+            self._last_raw_pos = None
+            ball_pos_cm = None
+
+        self._is_tracking = (self._confirm_count >= self.CONFIRM_FRAMES)
 
         return ball_pos_cm, debug

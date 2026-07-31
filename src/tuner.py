@@ -12,7 +12,7 @@ class Tuner:
         ("PIXEL_RIGHT", 570, 640),
         ("CENTER_PIXEL", 320, 640),
         ("BAR_LENGTH_CM", 25, 50),
-        ("DIFF_THRESHOLD", 106, 255),
+        ("SIMPLE_THRESHOLD", 90, 255),
         ("MORPH_KERNEL_SIZE", 16, 17),
         ("PROJECTION_SNR", 51, 100),
         ("AREA_MIN", 500, 5000),
@@ -39,11 +39,14 @@ class Tuner:
             "pixel_right": cv2.getTrackbarPos("PIXEL_RIGHT", cls.WINDOW_NAME),
             "center_pixel": cv2.getTrackbarPos("CENTER_PIXEL", cls.WINDOW_NAME),
             "bar_length_cm": cv2.getTrackbarPos("BAR_LENGTH_CM", cls.WINDOW_NAME),
-            "diff_threshold": cv2.getTrackbarPos("DIFF_THRESHOLD", cls.WINDOW_NAME),
+            "simple_threshold": cv2.getTrackbarPos("SIMPLE_THRESHOLD", cls.WINDOW_NAME),
             "morph_kernel_size": cv2.getTrackbarPos("MORPH_KERNEL_SIZE", cls.WINDOW_NAME),
             "projection_snr": cv2.getTrackbarPos("PROJECTION_SNR", cls.WINDOW_NAME) / 10.0,
             "area_min": cv2.getTrackbarPos("AREA_MIN", cls.WINDOW_NAME),
             "area_max": cv2.getTrackbarPos("AREA_MAX", cls.WINDOW_NAME),
+            "spatial_bg_kernel_size": cv2.getTrackbarPos("SPATIAL_BG_KERNEL", cls.WINDOW_NAME),
+            "adaptive_block_size": cv2.getTrackbarPos("ADAPTIVE_BLOCK", cls.WINDOW_NAME),
+            "adaptive_c": cv2.getTrackbarPos("ADAPTIVE_C", cls.WINDOW_NAME),
         }
 
     @staticmethod
@@ -56,11 +59,14 @@ class Tuner:
             ("Pixel Right", str(params["pixel_right"])),
             ("Center Pixel", str(params.get("center_pixel", 320))),
             ("Bar Length", str(params.get("bar_length_cm", 25)) + " cm"),
-            ("Diff Threshold", str(params["diff_threshold"])),
+            ("Simple Threshold", str(params.get("simple_threshold", 90))),
             ("Morph Kernel", str(params["morph_kernel_size"])),
             ("SNR Threshold", f"{params['projection_snr']:.1f}"),
             ("Area Min", str(params.get("area_min", 500))),
             ("Area Max", str(params.get("area_max", 15000))),
+            ("Spatial BG Kernel", str(params.get("spatial_bg_kernel_size", 31))),
+            ("Adaptive Block", str(params.get("adaptive_block_size", 31))),
+            ("Adaptive C", str(params.get("adaptive_c", 5))),
         ]
         canvas = np.zeros((len(cols) * 34 + 2, 280, 3), dtype=np.uint8)
         canvas[:] = (30, 30, 30)

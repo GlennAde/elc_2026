@@ -31,15 +31,9 @@ class Application:
         )
 
         det_cfg = self.cfg.get("detector", {})
-        bg_file = det_cfg.get("background_file")
-        if bg_file:
-            bg_file = os.path.join(PROJECT_ROOT, bg_file) if not os.path.isabs(bg_file) else bg_file
         self.detector = BallDetector(
             clahe_clip=det_cfg.get("clahe_clip", 2.0),
             hough_cfg=det_cfg.get("hough"),
-            bg_file=bg_file,
-            bg_adapt_rate=det_cfg.get("bg_adapt_rate", 0.005),
-            bg_adapt_threshold=det_cfg.get("bg_adapt_threshold", 30),
         )
 
         kf_cfg = self.cfg.get("kalman", {})
@@ -55,6 +49,8 @@ class Application:
         self.show_debug = self.cfg.get("gui", {}).get("debug_windows", True)
         self._static_params = self._build_static_params()
         self._last_frame_ts = None
+
+        self._simple_threshold = det_cfg.get("simple_threshold", 90)
 
         self.serial = None
         ser_cfg = self.cfg.get("serial", {})
@@ -74,12 +70,12 @@ class Application:
             "pixel_left": pl,
             "pixel_right": pr,
             "center_pixel": d.get("center_pixel", (pl + pr) // 2),
-            "diff_threshold": d.get("diff_threshold", 30),
             "morph_kernel_size": d.get("morph_kernel_size", 7),
             "projection_snr": d.get("projection_snr", 35) / 10.0,
             "bar_length_cm": d.get("bar_length_cm", self.bar_length_cm),
             "area_min": d.get("area_min", 500),
             "area_max": d.get("area_max", 15000),
+            "simple_threshold": d.get("simple_threshold", 90),
         }
 
     def run(self):
@@ -111,17 +107,18 @@ class Application:
             dt_real = min(dt_real, 0.05)  # 上限 50ms，防止异常帧
             self._last_frame_ts = now
 
-            if self.show_debug:
-                ROIManager.draw_roi_overlay(frame, roi_y_min, roi_y_max,
-                                            center_pixel=p.get("center_pixel"),
-                                            roi_x_min=p["pixel_left"],
-                                            roi_x_max=p["pixel_right"])
             roi_gray, roi_x_min = ROIManager.extract_roi(
                 frame, roi_y_min, roi_y_max,
                 roi_x_min=p["pixel_left"], roi_x_max=p["pixel_right"],
             )
             if roi_gray is None:
                 continue
+
+            if self.show_debug:
+                ROIManager.draw_roi_overlay(frame, roi_y_min, roi_y_max,
+                                            center_pixel=p.get("center_pixel"),
+                                            roi_x_min=p["pixel_left"],
+                                            roi_x_max=p["pixel_right"])
 
             key = cv2.waitKey(1) & 0xFF if self.show_debug else -1
 
@@ -135,10 +132,11 @@ class Application:
             filtered_pos = None
             filtered_vel = None
 
-            ball_pos_cm, debug = self.detector.detect(
+            ball_pos_cm, debug = self.detector.detect_simple(
                 roi_gray,
-                p["diff_threshold"], p["morph_kernel_size"],
-                p["projection_snr"],
+                simple_threshold=p.get("simple_threshold", 90),
+                morph_kernel_size=p["morph_kernel_size"],
+                projection_snr=p["projection_snr"],
                 center_pixel=p.get("center_pixel", (p["pixel_left"] + p["pixel_right"]) // 2),
                 scale_k=self.bar_length_cm / (p["pixel_right"] - p["pixel_left"]) if p["pixel_right"] != p["pixel_left"] else 0.0,
                 half_bar=self.bar_length_cm / 2.0,
