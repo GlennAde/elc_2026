@@ -64,10 +64,16 @@ while cap.isOpened():
         print("无法获取摄像头画面！")
         break
 
-    cv2.rectangle(frame, (0, ROI_Y_MIN), (frame.shape[1], ROI_Y_MAX),
-                  (0, 255, 255), 2)
-    cv2.putText(frame, "ROI Area", (10, ROI_Y_MIN - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
+    cv2.rectangle(frame, (0, ROI_Y_MIN), (frame.shape[1], ROI_Y_MAX), (0, 255, 255), 2)
+    cv2.putText(
+        frame,
+        "ROI Area",
+        (10, ROI_Y_MIN - 10),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (0, 255, 255),
+        1,
+    )
 
     roi = frame[ROI_Y_MIN:ROI_Y_MAX, :]
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -107,14 +113,24 @@ while cap.isOpened():
             ball_pos_cm = max(-12.5, min(12.5, ball_pos_cm))
 
             roi_center_y = int((ROI_Y_MIN + ROI_Y_MAX) / 2)
-            cv2.circle(frame, (int(ball_x_pixel), roi_center_y), 12,
-                       (0, 255, 0), -1)
-            cv2.putText(frame, f"Ball Pos: {ball_pos_cm:.2f} cm",
-                        (20, 50), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.9, (0, 255, 0), 2)
+            cv2.circle(frame, (int(ball_x_pixel), roi_center_y), 12, (0, 255, 0), -1)
+            cv2.putText(
+                frame,
+                f"Ball Pos: {ball_pos_cm:.2f} cm",
+                (20, 50),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (0, 255, 0),
+                2,
+            )
 
-            cv2.line(proj_canvas, (int(ball_x_pixel), 0),
-                     (int(ball_x_pixel), 150), (0, 0, 255), 2)
+            cv2.line(
+                proj_canvas,
+                (int(ball_x_pixel), 0),
+                (int(ball_x_pixel), 150),
+                (0, 0, 255),
+                2,
+            )
 
         # 有限差分简易速度估计
         now = cv2.getTickCount() / cv2.getTickFrequency()
@@ -129,16 +145,27 @@ while cap.isOpened():
             velocity = 0.0
 
         direction = "->" if velocity > 0 else "<-" if velocity < 0 else "--"
-        cv2.putText(frame, f"Velocity: {velocity:.2f} cm/s {direction}",
-                    (20, 90), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8, (0, 255, 255), 2)
+        cv2.putText(
+            frame,
+            f"Velocity: {velocity:.2f} cm/s {direction}",
+            (20, 90),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 255, 255),
+            2,
+        )
 
-        norm_proj = (y_projection / (np.max(y_projection) + 1e-5) * 120).astype(np.int32)
+        norm_proj = (y_projection / (np.max(y_projection) + 1e-5) * 120).astype(
+            np.int32
+        )
         for x in range(1, len(norm_proj)):
-            cv2.line(proj_canvas,
-                     (x - 1, 140 - norm_proj[x - 1]),
-                     (x, 140 - norm_proj[x]),
-                     (255, 255, 255), 1)
+            cv2.line(
+                proj_canvas,
+                (x - 1, 140 - norm_proj[x - 1]),
+                (x, 140 - norm_proj[x]),
+                (255, 255, 255),
+                1,
+            )
 
         cv2.imshow("1. Diff Image", diff)
         cv2.imshow("2. Thresh + Morphology", thresh_clean)
