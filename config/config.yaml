@@ -43,4 +43,4 @@ tuner_defaults:
   simple_threshold: 226
 
 gui:
-  debug_windows: True 
+  debug_windows: False 

@@ -1,0 +1,12 @@
+Warning: Ignoring XDG_SESSION_TYPE=wayland on Gnome. Use QT_QPA_PLATFORM=wayland to run on Wayland anyway.
+[Camera Info] 内参配置文件 '/home/guga/elc_2026/config/camera_matrix.yaml' 中未开启畸变矫正。
+[Camera Info] 摄像头 ID:0 打开成功！(640x480 @ 120fps)
+[Serial Info] 串口 /dev/ttyCP210x @ 115200 打开成功
+[Camera Info] 摄像头已释放
+[Serial Info] 串口已关闭
+Warning: Ignoring XDG_SESSION_TYPE=wayland on Gnome. Use QT_QPA_PLATFORM=wayland to run on Wayland anyway.
+[Camera Info] 内参配置文件 '/home/guga/elc_2026/config/camera_matrix.yaml' 中未开启畸变矫正。
+[Camera Info] 摄像头 ID:0 打开成功！(640x480 @ 120fps)
+[Serial Info] 串口 /dev/ttyCP210x @ 115200 打开成功
+[Camera Info] 摄像头已释放
+[Serial Info] 串口已关闭
